@@ -32,7 +32,7 @@ MODEL_FILENAME = 'vit_plantdisease.pt'
 MODEL_PATH = APP_DIR / MODEL_FILENAME
 MODEL_CACHE_PATH = Path.home() / '.cache' / 'crop-doctor' / MODEL_FILENAME
 CLASSES_PATH = APP_DIR / 'classes.txt'
-DEFAULT_MODEL_URL = 'https://huggingface.co/akshayjod/crop-doctor-model/resolve/main/vit_plantdisease.pt'
+DEFAULT_MODEL_URL = 'https://huggingface.co/akshayjod/crop-doc/resolve/main/vit_plantdisease.pt'
 
 
 def get_config_value(*keys):
