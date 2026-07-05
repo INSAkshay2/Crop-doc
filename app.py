@@ -2,6 +2,10 @@ import streamlit as st
 import torch
 from torchvision import transforms
 from PIL import Image
+from pathlib import Path
+from urllib.request import urlopen
+import os
+import shutil
 
 # Set Streamlit page configuration for aesthetics
 st.set_page_config(
@@ -23,38 +27,94 @@ st.markdown(
 )
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+APP_DIR = Path(__file__).resolve().parent
+MODEL_FILENAME = 'vit_plantdisease.pt'
+MODEL_PATH = APP_DIR / MODEL_FILENAME
+MODEL_CACHE_PATH = Path.home() / '.cache' / 'crop-doctor' / MODEL_FILENAME
+CLASSES_PATH = APP_DIR / 'classes.txt'
+DEFAULT_MODEL_URL = 'https://huggingface.co/akshayjod/crop-doctor-model/resolve/main/vit_plantdisease.pt'
 
-# Class names for predictions
-class_names = [
-    'Apple__Apple_scab', 'Apple_Black_rot', 'Apple_Cedar_apple_rust', 'Apple_healthy',
-    'Blueberry_healthy', "Cherry(including_sour)Powdery_mildew", "Cherry(including_sour)healthy",
-    'Corn(maize)Cercospora_leaf_spot Gray_leaf_spot', 'Corn(maize)Common_rust', 'Corn_(maize)Northern_Leaf_Blight',
-    'Corn(maize)healthy', 'Grape_Black_rot', 'Grape_Esca(Black_Measles)', 'Grape__Leaf_blight(Isariopsis_Leaf_Spot)',
-    'Grape__healthy', 'Orange_Haunglongbing(Citrus_greening)', 'Peach__Bacterial_spot', 'Peach_healthy',
-    'Pepper,_bell_Bacterial_spot', 'Pepper,_bell_healthy', 'Potato_Early_blight', 'Potato_Late_blight',
-    'Potato_healthy', 'Raspberry_healthy', 'Soybean_healthy', 'Squash_Powdery_mildew', 'Strawberry_Leaf_scorch',
-    'Strawberry_healthy', 'Tomato_Bacterial_spot', 'Tomato_Early_blight', 'Tomato_Late_blight',
-    'Tomato_Leaf_Mold', 'Tomato_Septoria_leaf_spot', 'Tomato_Spider_mites Two-spotted_spider_mite',
-    'Tomato_Target_Spot', 'Tomato_Tomato_Yellow_Leaf_Curl_Virus', 'Tomato_Tomato_mosaic_virus', 'Tomato__healthy'
-]
+
+def get_config_value(*keys):
+    for key in keys:
+        try:
+            value = st.secrets[key]
+        except Exception:
+            value = None
+        if value:
+            return value
+        value = os.getenv(key)
+        if value:
+            return value
+    return None
+
+
+def download_model(download_url):
+    MODEL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = MODEL_CACHE_PATH.with_suffix(MODEL_CACHE_PATH.suffix + '.download')
+    try:
+        with urlopen(download_url) as response, open(temporary_path, 'wb') as output_file:
+            shutil.copyfileobj(response, output_file)
+        temporary_path.replace(MODEL_CACHE_PATH)
+        return MODEL_CACHE_PATH
+    except Exception as exc:
+        if temporary_path.exists():
+            temporary_path.unlink()
+        raise FileNotFoundError(f"Unable to download model from {download_url}: {exc}") from exc
+
+
+def resolve_model_path():
+    if MODEL_PATH.exists():
+        return MODEL_PATH
+
+    download_url = get_config_value('MODEL_URL', 'CROP_DOCTOR_MODEL_URL', 'MODEL_DOWNLOAD_URL') or DEFAULT_MODEL_URL
+    if download_url:
+        return download_model(download_url)
+
+    raise FileNotFoundError(
+        f"Model file not found. Expected it at {MODEL_PATH}. "
+        "For local runs, place vit_plantdisease.pt next to app.py. "
+        "For Streamlit Community Cloud, the app will download the default Hugging Face model automatically, or you can override it with MODEL_URL or CROP_DOCTOR_MODEL_URL."
+    )
+
+
+def load_class_names():
+    if not CLASSES_PATH.exists():
+        raise FileNotFoundError(f"Class label file not found at {CLASSES_PATH}.")
+    return [line.strip() for line in CLASSES_PATH.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+try:
+    class_names = load_class_names()
+except FileNotFoundError as error:
+    st.error(str(error))
+    st.stop()
 
 @st.cache_resource
 def load_model():
     import torchvision.models as models
     import torch.nn as nn
     num_classes = len(class_names)
-    model = models.vit_b_16(weights='IMAGENET1K_V1')
+    model = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1)
     for param in model.parameters():
         param.requires_grad = False
     model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
     for param in model.heads.head.parameters():
         param.requires_grad = True
-    model.load_state_dict(torch.load('vit_plantdisease.pt', map_location=device))
+    model_path = resolve_model_path()
+    try:
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load model weights from {model_path}: {exc}") from exc
     model.to(device)
     model.eval()
     return model
 
-model = load_model()
+try:
+    model = load_model()
+except (FileNotFoundError, RuntimeError) as error:
+    st.error(str(error))
+    st.stop()
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
